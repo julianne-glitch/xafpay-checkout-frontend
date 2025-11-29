@@ -1,260 +1,271 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 
-export default function CheckoutPage() {
+export default function Checkout() {
   const [amount, setAmount] = useState(2000);
   const [carrier, setCarrier] = useState("MTN");
   const [phoneNumber, setPhoneNumber] = useState("");
   const [phoneError, setPhoneError] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [sessionData, setSessionData] = useState(null);
-  const [error, setError] = useState("");
   const [backendStatus, setBackendStatus] = useState("");
-  const [paymentStatus, setPaymentStatus] = useState(null);
+  const [status, setStatus] = useState("");
+  const [loading, setLoading] = useState(false);
 
-  const API_BASE = import.meta.env.VITE_API_BASE_URL;
-  console.log("Loaded API_BASE:", API_BASE);
+  const API_BASE = import.meta.env.VITE_API_BASE;
 
-  // ------------------------------------------
-  // Backend connectivity check
-  // ------------------------------------------
+  // Polling refs
+  const polling = useRef(false);
+  const pollAttempts = useRef(0);
+  const currentOrderId = useRef(null);
+
+  // -----------------------------
+  // BACKEND HEALTH CHECK
+  // -----------------------------
   useEffect(() => {
-    const checkBackend = async () => {
+    async function ping() {
       try {
-        const res = await fetch(`${API_BASE}/health.php`);
-        setBackendStatus(res.ok ? "🟢 Backend Connected" : "🟠 Backend Error");
-      } catch (err) {
-        setBackendStatus("🔴 Backend Unreachable");
+        const r = await fetch(`${API_BASE}/health.php`);
+        setBackendStatus(r.ok ? "🟢 Backend Connected" : "🟠 Error Connecting");
+      } catch {
+        setBackendStatus("🔴 Backend Offline");
       }
-    };
-    checkBackend();
+    }
+    ping();
   }, [API_BASE]);
 
-  // ------------------------------------------
-  // Phone number validation
-  // ------------------------------------------
+  // -----------------------------
+  // PHONE VALIDATION
+  // -----------------------------
   useEffect(() => {
-    if (!phoneNumber) {
-      setPhoneError("");
-      return;
-    }
+    if (!phoneNumber) return setPhoneError("");
 
-    const cleaned = phoneNumber.replace(/\D/g, "");
+    const clean = phoneNumber.replace(/\D/g, "");
+    if (clean.length !== 9) return setPhoneError("Phone must be 9 digits");
 
-    if (cleaned.length !== 9) {
-      setPhoneError("Phone number must be exactly 9 digits.");
-      return;
-    }
+    if (carrier === "MTN" && !/^6(5|6|7|8)/.test(clean))
+      return setPhoneError("MTN numbers start with 65, 66, 67, 68");
 
-    // MTN Cameroon: 650–659, 670–679, 680–689
-    if (
-      carrier === "MTN" &&
-      !/^6(5\d|7\d|8\d)/.test(cleaned)
-    ) {
-      setPhoneError("MTN numbers must start with 65, 67, or 68.");
-      return;
-    }
-
-    // Orange: 690–699
-    if (carrier === "Orange" && !/^69/.test(cleaned)) {
-      setPhoneError("Orange numbers must start with 69.");
-      return;
-    }
+    if (carrier === "ORANGE" && !/^69/.test(clean))
+      return setPhoneError("Orange numbers start with 69");
 
     setPhoneError("");
   }, [phoneNumber, carrier]);
 
-  const phoneValid = phoneError === "" && phoneNumber.length === 9;
+  const phoneValid =
+    phoneError === "" && phoneNumber.replace(/\D/g, "").length === 9;
 
-  // ------------------------------------------
-  // PAYMENT FLOW
-  // ------------------------------------------
-  const handleCheckout = async () => {
+  // -----------------------------
+  // POLLING HANDLER (corrected)
+  // -----------------------------
+  const startPolling = (orderId) => {
+    polling.current = true;
+    pollAttempts.current = 0;
+    currentOrderId.current = orderId;
+
+    const poll = async () => {
+      if (!polling.current) return;
+
+      pollAttempts.current++;
+
+      // Stop after 20 tries (~60 seconds)
+      if (pollAttempts.current > 20) {
+        polling.current = false;
+        setStatus(
+          "⚠ Payment taking longer than expected. Please check your phone."
+        );
+        return;
+      }
+
+      try {
+        const res = await fetch(
+          `${API_BASE}/check_payment.php?order_id=${orderId}`
+        );
+        const data = await res.json();
+
+        if (!data.ok) return;
+
+        const st = data.status.toUpperCase();
+
+        // -----------------------------
+        // MATCH BACKEND STATUSES
+        // -----------------------------
+        if (st === "SUCCESSFUL") {
+          polling.current = false;
+          setStatus("✅ Payment SUCCESSFUL!");
+          return;
+        }
+
+        if (st === "FAILED") {
+          polling.current = false;
+          setStatus("❌ Payment FAILED.");
+          return;
+        }
+
+        if (st === "CANCELED" || st === "CANCELLED") {
+          polling.current = false;
+          setStatus("⚠ Payment was CANCELED.");
+          return;
+        }
+
+        if (st === "EXPIRED") {
+          polling.current = false;
+          setStatus("⚠ Payment EXPIRED.");
+          return;
+        }
+
+        // else still pending → continue
+      } catch {}
+
+      setTimeout(poll, 3000);
+    };
+
+    poll();
+  };
+
+  // -----------------------------
+  // HANDLE PAY
+  // -----------------------------
+  const handlePay = async () => {
     if (!phoneValid) return;
 
     setLoading(true);
-    setError("");
+    setStatus("");
 
     try {
-      // 1️⃣ Create session
-      const sessionRes = await fetch(`${API_BASE}/sessions`, {
+      const res = await fetch(`${API_BASE}/pay.php`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          carrier_code: carrier,
-          amount: amount,
-          phone_number: phoneNumber,
+          amount,
+          phone: phoneNumber,
+          carrier,
         }),
       });
 
-      const session = await sessionRes.json();
+      const rawText = await res.text();
+      let data;
 
-      if (!session.ok || !session.order_id) {
-        setError(session.error || "Failed to create checkout session.");
+      try {
+        data = JSON.parse(rawText);
+      } catch {
+        setStatus("❌ Backend returned invalid JSON");
         setLoading(false);
         return;
       }
 
-      setSessionData(session);
-
-      // 2️⃣ Request MTN payment
-      const payRes = await fetch(`${API_BASE}/pay`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          amount: session.amount,
-          currency: "XAF",
-          order_id: session.order_id,
-        }),
-      });
-
-      const pay = await payRes.json();
-
-      if (!pay.ok) {
-        setError("MTN Payment failed to initialize.");
+      if (!data.ok) {
+        setStatus("❌ Error: " + (data.error || "Unknown error"));
         setLoading(false);
         return;
       }
 
-      // 3️⃣ Start status polling
-      pollStatus(pay.status_url);
+      // Save order for polling
+      const orderId = data.order_id;
+      currentOrderId.current = orderId;
 
+      // If redirected mode (rare)
+      if (data.mode === "REDIRECT" && data.payment_url) {
+        setStatus("🔁 Redirecting…");
+        window.location.href = data.payment_url;
+        return;
+      }
+
+      // Direct MoMo push
+      setStatus(
+        `🔁 Payment Started\nRequest ID: ${data.tranzak_request_id}\nWaiting for confirmation…`
+      );
+
+      startPolling(orderId);
     } catch (err) {
-      setError("Network error: " + err.message);
+      setStatus("❌ Network error: " + err.message);
     }
 
     setLoading(false);
   };
 
-  // ------------------------------------------
-  // STATUS POLLING
-  // ------------------------------------------
-  const pollStatus = (url) => {
-    const interval = setInterval(async () => {
-      try {
-        const res = await fetch(url);
-        const data = await res.json();
-
-        if (data.status !== "PENDING") {
-          clearInterval(interval);
-          setPaymentStatus(data.status);
-        }
-      } catch (err) {
-        console.log("Polling error:", err);
-      }
-    }, 2000);
-  };
-
+  // -----------------------------
+  // UI
+  // -----------------------------
   return (
     <div className="min-h-screen flex items-center justify-center bg-white">
       <div className="bg-white shadow-xl rounded-2xl p-8 w-full max-w-md border border-gray-100">
-
+        {/* Header */}
         <div className="text-center mb-6">
-          <img src="/logo.jpg" alt="XafPay" className="mx-auto h-14 mb-3" />
-          <h1 className="text-2xl font-bold text-gray-800">XafPay Secure Checkout</h1>
-          <p className="text-sm text-gray-500">Safe & Encrypted Payment</p>
+          <img src="/logo.jpg" className="h-14 mx-auto mb-3" />
+          <h1 className="text-2xl font-bold">XafPay Secure Checkout</h1>
+          <p className="text-gray-500 text-sm">{backendStatus}</p>
         </div>
 
-        <p className="text-center text-sm mb-4">{backendStatus}</p>
-
-        {error && (
-          <div className="text-red-600 text-sm bg-red-50 border border-red-200 p-3 rounded-md mb-4">
-            ❌ {error}
+        {/* Status Box */}
+        {status && (
+          <div
+            className={`p-3 mb-4 rounded text-sm whitespace-pre-wrap ${
+              status.startsWith("❌")
+                ? "bg-red-100 text-red-600 border border-red-300"
+                : status.startsWith("⚠")
+                ? "bg-yellow-100 text-yellow-700 border border-yellow-300"
+                : "bg-green-100 text-green-700 border border-green-300"
+            }`}
+          >
+            {status}
           </div>
         )}
 
-        {paymentStatus && (
-          <div className="mt-6 text-center">
-            {paymentStatus === "SUCCESS" && (
-              <p className="text-green-600 text-lg font-bold">
-                Payment Successful 🎉
-              </p>
-            )}
+        {/* Amount */}
+        <div className="mb-4">
+          <label>Amount (XAF)</label>
+          <input
+            type="number"
+            value={amount}
+            onChange={(e) => setAmount(Number(e.target.value))}
+            className="w-full border p-3 rounded"
+          />
+        </div>
 
-            {paymentStatus === "FAILED" && (
-              <p className="text-red-600 text-lg font-bold">
-                Payment Failed ❌
-              </p>
-            )}
-          </div>
-        )}
+        {/* Phone */}
+        <div className="mb-4">
+          <label>Mobile Money Number</label>
+          <input
+            type="tel"
+            placeholder="6XX XXX XXX"
+            value={phoneNumber}
+            onChange={(e) => setPhoneNumber(e.target.value)}
+            className={`w-full border p-3 rounded ${
+              phoneError ? "border-red-500" : ""
+            }`}
+          />
+          {phoneError && <p className="text-red-500 text-sm">{phoneError}</p>}
+        </div>
 
-        {sessionData && !paymentStatus && (
-          <div className="text-center space-y-3">
-            <p><strong>Order ID:</strong> {sessionData.order_id}</p>
-            <p><strong>Amount:</strong> {sessionData.amount} XAF</p>
-            <p><strong>Carrier:</strong> {carrier}</p>
-            <p><strong>Phone:</strong> {phoneNumber}</p>
+        {/* Carrier Buttons */}
+        <div className="flex gap-3 mt-3">
+          <button
+            onClick={() => setCarrier("MTN")}
+            className={`flex-1 py-3 rounded-lg font-semibold bg-yellow-400 ${
+              carrier === "MTN" ? "ring-4 ring-yellow-600" : ""
+            }`}
+          >
+            MTN MoMo
+          </button>
 
-            <div className="bg-green-50 text-green-700 p-3 rounded-md mt-4">
-              Waiting for MTN MoMo confirmation...
-            </div>
-          </div>
-        )}
+          <button
+            onClick={() => setCarrier("ORANGE")}
+            className={`flex-1 py-3 rounded-lg font-semibold bg-orange-300 ${
+              carrier === "ORANGE" ? "ring-4 ring-orange-600" : ""
+            }`}
+          >
+            Orange Money
+          </button>
+        </div>
 
-        {!sessionData && (
-          <>
-            {/* Amount */}
-            <div className="mb-4">
-              <label className="block text-gray-600 mb-2">Amount (XAF)</label>
-              <input
-                type="number"
-                value={amount}
-                onChange={(e) => setAmount(Number(e.target.value))}
-                className="w-full border rounded-lg p-3 focus:outline-none focus:ring focus:ring-blue-200"
-              />
-            </div>
-
-            {/* Phone */}
-            <div className="mb-4">
-              <label className="block text-gray-600 mb-2">Mobile Money Number</label>
-              <input
-                type="tel"
-                placeholder="6XX XXX XXX"
-                value={phoneNumber}
-                onChange={(e) => setPhoneNumber(e.target.value)}
-                className={`w-full border rounded-lg p-3 focus:outline-none ${
-                  phoneError ? "border-red-500 ring-red-200" : "focus:ring focus:ring-blue-200"
-                }`}
-              />
-              {phoneError && (
-                <p className="text-red-500 text-sm mt-1">{phoneError}</p>
-              )}
-            </div>
-
-            {/* Payment Method */}
-            <p className="font-semibold mb-2 text-gray-700">Payment Method</p>
-
-            <div className="flex gap-3 mt-3">
-              <button
-                onClick={() => setCarrier("MTN")}
-                className={`flex-1 py-3 rounded-lg font-semibold bg-yellow-400 hover:bg-yellow-500 ${
-                  carrier === "MTN" ? "ring-4 ring-yellow-600" : ""
-                }`}
-              >
-                Pay with MTN MoMo
-              </button>
-
-              <button
-                onClick={() => setCarrier("Orange")}
-                className={`flex-1 py-3 rounded-lg font-semibold bg-gray-200 hover:bg-gray-300 ${
-                  carrier === "Orange" ? "ring-4 ring-orange-600" : ""
-                }`}
-              >
-                Pay with Orange Money
-              </button>
-            </div>
-
-            <button
-              onClick={handleCheckout}
-              disabled={!phoneValid || loading}
-              className={`w-full mt-6 py-3 rounded-lg text-white text-lg font-bold ${
-                !phoneValid || loading ? "bg-red-300 cursor-not-allowed" : "bg-red-600 hover:bg-red-700"
-              }`}
-            >
-              {loading ? "Processing..." : `Pay ${amount} XAF`}
-            </button>
-          </>
-        )}
+        {/* Pay Button */}
+        <button
+          onClick={handlePay}
+          disabled={!phoneValid || loading}
+          className={`w-full mt-6 py-3 rounded-lg text-white text-lg font-bold ${
+            loading ? "bg-gray-400" : "bg-red-600 hover:bg-red-700"
+          }`}
+        >
+          {loading ? "Processing…" : `Pay ${amount} XAF`}
+        </button>
       </div>
     </div>
   );
