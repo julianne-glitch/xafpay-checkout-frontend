@@ -53,7 +53,7 @@ export default function Checkout() {
     phoneError === "" && phoneNumber.replace(/\D/g, "").length === 9;
 
   // -----------------------------
-  // POLLING HANDLER (corrected)
+  // POLLING HANDLER (FINAL VERSION)
   // -----------------------------
   const startPolling = (orderId) => {
     polling.current = true;
@@ -82,12 +82,17 @@ export default function Checkout() {
 
         if (!data.ok) return;
 
-        const st = data.status.toUpperCase();
+        const st = (data.status || "").toUpperCase();
 
         // -----------------------------
-        // MATCH BACKEND STATUSES
+        // MATCH ALL SUCCESS STATUSES
         // -----------------------------
-        if (st === "SUCCESSFUL") {
+        if (
+          st === "SUCCESSFUL" ||
+          st === "SUCCESS" ||
+          st === "COMPLETED" ||
+          st === "PAID"
+        ) {
           polling.current = false;
           setStatus("✅ Payment SUCCESSFUL!");
           return;
@@ -114,6 +119,7 @@ export default function Checkout() {
         // else still pending → continue
       } catch {}
 
+      // Continue polling
       setTimeout(poll, 3000);
     };
 
@@ -161,7 +167,7 @@ export default function Checkout() {
       const orderId = data.order_id;
       currentOrderId.current = orderId;
 
-      // If redirected mode (rare)
+      // Redirect mode (rare)
       if (data.mode === "REDIRECT" && data.payment_url) {
         setStatus("🔁 Redirecting…");
         window.location.href = data.payment_url;
