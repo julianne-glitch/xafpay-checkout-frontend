@@ -4,6 +4,8 @@ export default function Checkout() {
   const [amount, setAmount] = useState(2000);
   const [carrier, setCarrier] = useState("MTN");
   const [phoneNumber, setPhoneNumber] = useState("");
+  const [email, setEmail] = useState("");                 // ⭐ NEW
+  const [emailError, setEmailError] = useState("");       // ⭐ NEW
   const [phoneError, setPhoneError] = useState("");
   const [backendStatus, setBackendStatus] = useState("");
   const [status, setStatus] = useState("");
@@ -32,6 +34,18 @@ export default function Checkout() {
   }, [API_BASE]);
 
   // -----------------------------
+  // EMAIL VALIDATION (NEW)
+  // -----------------------------
+  useEffect(() => {
+    if (!email) return setEmailError("");
+
+    const valid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+    setEmailError(valid ? "" : "Invalid email format");
+  }, [email]);
+
+  const emailValid = email && emailError === "";
+
+  // -----------------------------
   // PHONE VALIDATION
   // -----------------------------
   useEffect(() => {
@@ -53,7 +67,7 @@ export default function Checkout() {
     phoneError === "" && phoneNumber.replace(/\D/g, "").length === 9;
 
   // -----------------------------
-  // POLLING HANDLER (FINAL VERSION)
+  // POLLING HANDLER (same)
   // -----------------------------
   const startPolling = (orderId) => {
     polling.current = true;
@@ -65,7 +79,6 @@ export default function Checkout() {
 
       pollAttempts.current++;
 
-      // Stop after 20 tries (~60 seconds)
       if (pollAttempts.current > 20) {
         polling.current = false;
         setStatus(
@@ -84,9 +97,6 @@ export default function Checkout() {
 
         const st = (data.status || "").toUpperCase();
 
-        // -----------------------------
-        // MATCH ALL SUCCESS STATUSES
-        // -----------------------------
         if (
           st === "SUCCESSFUL" ||
           st === "SUCCESS" ||
@@ -115,11 +125,8 @@ export default function Checkout() {
           setStatus("⚠ Payment EXPIRED.");
           return;
         }
-
-        // else still pending → continue
       } catch {}
 
-      // Continue polling
       setTimeout(poll, 3000);
     };
 
@@ -127,10 +134,10 @@ export default function Checkout() {
   };
 
   // -----------------------------
-  // HANDLE PAY
+  // HANDLE PAY  (NOW SENDS EMAIL)
   // -----------------------------
   const handlePay = async () => {
-    if (!phoneValid) return;
+    if (!phoneValid || !emailValid) return;
 
     setLoading(true);
     setStatus("");
@@ -142,6 +149,7 @@ export default function Checkout() {
         body: JSON.stringify({
           amount,
           phone: phoneNumber,
+          email,                             // ⭐ NEW
           carrier,
         }),
       });
@@ -163,11 +171,9 @@ export default function Checkout() {
         return;
       }
 
-      // Save order for polling
       const orderId = data.order_id;
-      currentOrderId.current = orderId;
 
-      // Redirect mode (rare)
+      // Redirect mode
       if (data.mode === "REDIRECT" && data.payment_url) {
         setStatus("🔁 Redirecting…");
         window.location.href = data.payment_url;
@@ -226,6 +232,21 @@ export default function Checkout() {
           />
         </div>
 
+        {/* Email */}
+        <div className="mb-4">
+          <label>Email Address</label>
+          <input
+            type="email"
+            placeholder="you@example.com"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            className={`w-full border p-3 rounded ${
+              emailError ? "border-red-500" : ""
+            }`}
+          />
+          {emailError && <p className="text-red-500 text-sm">{emailError}</p>}
+        </div>
+
         {/* Phone */}
         <div className="mb-4">
           <label>Mobile Money Number</label>
@@ -265,7 +286,7 @@ export default function Checkout() {
         {/* Pay Button */}
         <button
           onClick={handlePay}
-          disabled={!phoneValid || loading}
+          disabled={!phoneValid || !emailValid || loading}
           className={`w-full mt-6 py-3 rounded-lg text-white text-lg font-bold ${
             loading ? "bg-gray-400" : "bg-red-600 hover:bg-red-700"
           }`}
