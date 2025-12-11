@@ -1,7 +1,14 @@
 import React, { useState, useEffect, useRef } from "react";
 
 export default function Checkout() {
-  const [amount, setAmount] = useState(0);                   // ⭐ Updated
+  const url = new URL(window.location.href);
+
+  // ⭐ READ VALUES SENT FROM WOOCOMMERCE
+  const orderId = url.searchParams.get("order_id");
+  const amountFromWC = Number(url.searchParams.get("amount")); // locked amount
+  const returnUrl = url.searchParams.get("return_url") || "/";
+
+  const [amount, setAmount] = useState(amountFromWC);
   const [carrier, setCarrier] = useState("MTN");
   const [phoneNumber, setPhoneNumber] = useState("");
   const [email, setEmail] = useState("");
@@ -13,32 +20,18 @@ export default function Checkout() {
 
   const API_BASE = import.meta.env.VITE_API_BASE;
 
-  // Polling refs
   const polling = useRef(false);
   const pollAttempts = useRef(0);
-  const currentOrderId = useRef(null);
+  const tranzakOrderId = useRef(null);
 
-  // ---------------------------------------------------
-  // 1️⃣ Load WooCommerce amount + order_id from URL
-  // ---------------------------------------------------
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-
-    const amt = params.get("amount");
-    const oid = params.get("order_id");
-
-    if (amt) setAmount(Number(amt));
-    if (oid) console.log("WooCommerce Order ID:", oid);
-  }, []);
-
-  // -----------------------------
+  // ------------------------------------------------------------
   // BACKEND HEALTH CHECK
-  // -----------------------------
+  // ------------------------------------------------------------
   useEffect(() => {
     async function ping() {
       try {
         const r = await fetch(`${API_BASE}/health.php`);
-        setBackendStatus(r.ok ? "🟢 Backend Connected" : "🟠 Error Connecting");
+        setBackendStatus(r.ok ? "🟢 Backend Connected" : "🟠 Partial Connectivity");
       } catch {
         setBackendStatus("🔴 Backend Offline");
       }
@@ -46,9 +39,9 @@ export default function Checkout() {
     ping();
   }, [API_BASE]);
 
-  // -----------------------------
+  // ------------------------------------------------------------
   // EMAIL VALIDATION
-  // -----------------------------
+  // ------------------------------------------------------------
   useEffect(() => {
     if (!email) return setEmailError("");
 
@@ -58,19 +51,17 @@ export default function Checkout() {
 
   const emailValid = email && emailError === "";
 
-  // -----------------------------
+  // ------------------------------------------------------------
   // PHONE VALIDATION
-  // -----------------------------
+  // ------------------------------------------------------------
   useEffect(() => {
     if (!phoneNumber) return setPhoneError("");
 
     const clean = phoneNumber.replace(/\D/g, "");
-
-    if (clean.length !== 9)
-      return setPhoneError("Phone must be 9 digits");
+    if (clean.length !== 9) return setPhoneError("Phone must be 9 digits");
 
     if (carrier === "MTN" && !/^6(5|6|7|8)/.test(clean))
-      return setPhoneError("MTN numbers start with 65, 66, 67, 68");
+      return setPhoneError("MTN numbers start with 65/66/67/68");
 
     if (carrier === "ORANGE" && !/^69/.test(clean))
       return setPhoneError("Orange numbers start with 69");
@@ -78,16 +69,15 @@ export default function Checkout() {
     setPhoneError("");
   }, [phoneNumber, carrier]);
 
-  const phoneValid =
-    phoneError === "" && phoneNumber.replace(/\D/g, "").length === 9;
+  const phoneValid = phoneError === "" && phoneNumber.replace(/\D/g, "").length === 9;
 
-  // -----------------------------
-  // POLLING HANDLER
-  // -----------------------------
-  const startPolling = (orderId) => {
+  // ------------------------------------------------------------
+  // START POLLING PAYMENT STATUS
+  // ------------------------------------------------------------
+  const startPolling = (xfOrderId) => {
     polling.current = true;
     pollAttempts.current = 0;
-    currentOrderId.current = orderId;
+    tranzakOrderId.current = xfOrderId;
 
     const poll = async () => {
       if (!polling.current) return;
@@ -96,39 +86,48 @@ export default function Checkout() {
 
       if (pollAttempts.current > 20) {
         polling.current = false;
-        setStatus("⚠ Payment taking longer than expected. Please check your phone.");
+        setStatus("⚠ Payment taking long. Please check your phone.");
         return;
       }
 
       try {
-        const res = await fetch(`${API_BASE}/check_payment.php?order_id=${orderId}`);
+        const res = await fetch(`${API_BASE}/check_payment.php?order_id=${xfOrderId}`);
         const data = await res.json();
 
         if (!data.ok) return;
 
         const st = (data.status || "").toUpperCase();
 
-        if (["SUCCESS", "SUCCESSFUL", "COMPLETED", "PAID"].includes(st)) {
+        // --------------------------
+        // PAYMENT SUCCESS
+        // --------------------------
+        if (["SUCCESSFUL", "SUCCESS", "COMPLETED", "PAID"].includes(st)) {
           polling.current = false;
-          setStatus("✅ Payment SUCCESSFUL!");
+
+          setStatus("✅ Payment SUCCESSFUL! Redirecting…");
+
+          // ⭐ CALL WOO WEBHOOK
+          await fetch("/wp-json/xafpay/v1/webhook", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              order_id: orderId,
+              status: "SUCCESS",
+              transaction_id: data.transaction_id || xfOrderId,
+            }),
+          });
+
+          // ⭐ REDIRECT CUSTOMER BACK TO WOO ORDER RECEIVED PAGE
+          window.location.href = returnUrl;
           return;
         }
 
-        if (st === "FAILED") {
+        // --------------------------
+        // FAILED / CANCELLED
+        // --------------------------
+        if (["FAILED", "CANCELED", "CANCELLED", "EXPIRED"].includes(st)) {
           polling.current = false;
-          setStatus("❌ Payment FAILED.");
-          return;
-        }
-
-        if (["CANCELED", "CANCELLED"].includes(st)) {
-          polling.current = false;
-          setStatus("⚠ Payment was CANCELED.");
-          return;
-        }
-
-        if (st === "EXPIRED") {
-          polling.current = false;
-          setStatus("⚠ Payment EXPIRED.");
+          setStatus("❌ Payment Failed or Cancelled.");
           return;
         }
       } catch {}
@@ -139,11 +138,11 @@ export default function Checkout() {
     poll();
   };
 
-  // -----------------------------
-  // HANDLE PAY
-  // -----------------------------
+  // ------------------------------------------------------------
+  // HANDLE PAY CLICK
+  // ------------------------------------------------------------
   const handlePay = async () => {
-    if (!phoneValid || !emailValid) return;
+    if (!emailValid || !phoneValid) return;
 
     setLoading(true);
     setStatus("");
@@ -157,39 +156,32 @@ export default function Checkout() {
           phone: phoneNumber,
           email,
           carrier,
+          order_id: orderId, // ⭐ NEW: link WooCommerce order to backend
         }),
       });
 
-      const rawText = await res.text();
-      let data = null;
+      const raw = await res.text();
+      let data;
 
       try {
-        data = JSON.parse(rawText);
+        data = JSON.parse(raw);
       } catch {
-        setStatus("❌ Backend returned invalid JSON");
+        setStatus("❌ Error: Backend returned invalid JSON");
         setLoading(false);
         return;
       }
 
       if (!data.ok) {
-        setStatus("❌ Error: " + (data.error || "Unknown error"));
+        setStatus("❌ Error: " + (data.error || "Unknown"));
         setLoading(false);
         return;
       }
 
-      const orderId = data.order_id;
-
-      // Tranzak redirect mode
-      if (data.mode === "REDIRECT" && data.payment_url) {
-        setStatus("🔁 Redirecting…");
-        window.location.href = data.payment_url;
-        return;
-      }
-
-      // MoMo push
-      setStatus(`🔁 Payment Started\nWaiting for confirmation…`);
-      startPolling(orderId);
-
+      // --------------------------
+      // DIRECT MOMO PUSH
+      // --------------------------
+      setStatus("🔁 Payment Started… Check your phone.");
+      startPolling(data.order_id);
     } catch (err) {
       setStatus("❌ Network error: " + err.message);
     }
@@ -197,45 +189,44 @@ export default function Checkout() {
     setLoading(false);
   };
 
-  // -----------------------------
+  // ------------------------------------------------------------
   // UI
-  // -----------------------------
+  // ------------------------------------------------------------
   return (
     <div className="min-h-screen flex items-center justify-center bg-white">
       <div className="bg-white shadow-xl rounded-2xl p-8 w-full max-w-md border border-gray-100">
-
-        {/* Header */}
+        
         <div className="text-center mb-6">
           <img src="/logo.jpg" className="h-14 mx-auto mb-3" />
           <h1 className="text-2xl font-bold">XafPay Secure Checkout</h1>
           <p className="text-gray-500 text-sm">{backendStatus}</p>
         </div>
 
-        {/* Status Box */}
         {status && (
           <div className={`p-3 mb-4 rounded text-sm whitespace-pre-wrap ${
-              status.startsWith("❌")
-                ? "bg-red-100 text-red-600 border border-red-300"
-                : status.startsWith("⚠")
-                ? "bg-yellow-100 text-yellow-700 border border-yellow-300"
-                : "bg-green-100 text-green-700 border border-green-300"
-            }`}>
+            status.startsWith("❌")
+              ? "bg-red-100 text-red-600 border border-red-300"
+              : status.startsWith("⚠")
+              ? "bg-yellow-100 text-yellow-700 border border-yellow-300"
+              : "bg-green-100 text-green-700 border border-green-300"
+          }`}>
             {status}
           </div>
         )}
 
-        {/* Amount (LOADED AUTOMATICALLY) */}
+        {/* AMOUNT (LOCKED) */}
         <div className="mb-4">
-          <label>Amount (XAF)</label>
+          <label>Amount Due (XAF)</label>
           <input
             type="number"
             value={amount}
-            onChange={(e) => setAmount(Number(e.target.value))}
-            className="w-full border p-3 rounded"
+            disabled
+            className="w-full border p-3 rounded bg-gray-100"
           />
+          <p className="text-xs text-gray-500 mt-1">Amount comes from your WooCommerce order.</p>
         </div>
 
-        {/* Email */}
+        {/* EMAIL */}
         <div className="mb-4">
           <label>Email Address</label>
           <input
@@ -248,7 +239,7 @@ export default function Checkout() {
           {emailError && <p className="text-red-500 text-sm">{emailError}</p>}
         </div>
 
-        {/* Phone */}
+        {/* PHONE */}
         <div className="mb-4">
           <label>Mobile Money Number</label>
           <input
@@ -261,7 +252,7 @@ export default function Checkout() {
           {phoneError && <p className="text-red-500 text-sm">{phoneError}</p>}
         </div>
 
-        {/* Carrier Buttons */}
+        {/* CARRIER SELECT */}
         <div className="flex gap-3 mt-3">
           <button
             onClick={() => setCarrier("MTN")}
@@ -282,7 +273,7 @@ export default function Checkout() {
           </button>
         </div>
 
-        {/* Pay Button */}
+        {/* PAY BTN */}
         <button
           onClick={handlePay}
           disabled={!phoneValid || !emailValid || loading}
