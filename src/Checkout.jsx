@@ -1,11 +1,11 @@
 import React, { useState, useEffect, useRef } from "react";
 
 export default function Checkout() {
-  const [amount, setAmount] = useState(2000);
+  const [amount, setAmount] = useState(0);                   // ⭐ Updated
   const [carrier, setCarrier] = useState("MTN");
   const [phoneNumber, setPhoneNumber] = useState("");
-  const [email, setEmail] = useState("");                 // ⭐ NEW
-  const [emailError, setEmailError] = useState("");       // ⭐ NEW
+  const [email, setEmail] = useState("");
+  const [emailError, setEmailError] = useState("");
   const [phoneError, setPhoneError] = useState("");
   const [backendStatus, setBackendStatus] = useState("");
   const [status, setStatus] = useState("");
@@ -17,6 +17,19 @@ export default function Checkout() {
   const polling = useRef(false);
   const pollAttempts = useRef(0);
   const currentOrderId = useRef(null);
+
+  // ---------------------------------------------------
+  // 1️⃣ Load WooCommerce amount + order_id from URL
+  // ---------------------------------------------------
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+
+    const amt = params.get("amount");
+    const oid = params.get("order_id");
+
+    if (amt) setAmount(Number(amt));
+    if (oid) console.log("WooCommerce Order ID:", oid);
+  }, []);
 
   // -----------------------------
   // BACKEND HEALTH CHECK
@@ -34,7 +47,7 @@ export default function Checkout() {
   }, [API_BASE]);
 
   // -----------------------------
-  // EMAIL VALIDATION (NEW)
+  // EMAIL VALIDATION
   // -----------------------------
   useEffect(() => {
     if (!email) return setEmailError("");
@@ -52,7 +65,9 @@ export default function Checkout() {
     if (!phoneNumber) return setPhoneError("");
 
     const clean = phoneNumber.replace(/\D/g, "");
-    if (clean.length !== 9) return setPhoneError("Phone must be 9 digits");
+
+    if (clean.length !== 9)
+      return setPhoneError("Phone must be 9 digits");
 
     if (carrier === "MTN" && !/^6(5|6|7|8)/.test(clean))
       return setPhoneError("MTN numbers start with 65, 66, 67, 68");
@@ -67,7 +82,7 @@ export default function Checkout() {
     phoneError === "" && phoneNumber.replace(/\D/g, "").length === 9;
 
   // -----------------------------
-  // POLLING HANDLER (same)
+  // POLLING HANDLER
   // -----------------------------
   const startPolling = (orderId) => {
     polling.current = true;
@@ -81,28 +96,19 @@ export default function Checkout() {
 
       if (pollAttempts.current > 20) {
         polling.current = false;
-        setStatus(
-          "⚠ Payment taking longer than expected. Please check your phone."
-        );
+        setStatus("⚠ Payment taking longer than expected. Please check your phone.");
         return;
       }
 
       try {
-        const res = await fetch(
-          `${API_BASE}/check_payment.php?order_id=${orderId}`
-        );
+        const res = await fetch(`${API_BASE}/check_payment.php?order_id=${orderId}`);
         const data = await res.json();
 
         if (!data.ok) return;
 
         const st = (data.status || "").toUpperCase();
 
-        if (
-          st === "SUCCESSFUL" ||
-          st === "SUCCESS" ||
-          st === "COMPLETED" ||
-          st === "PAID"
-        ) {
+        if (["SUCCESS", "SUCCESSFUL", "COMPLETED", "PAID"].includes(st)) {
           polling.current = false;
           setStatus("✅ Payment SUCCESSFUL!");
           return;
@@ -114,7 +120,7 @@ export default function Checkout() {
           return;
         }
 
-        if (st === "CANCELED" || st === "CANCELLED") {
+        if (["CANCELED", "CANCELLED"].includes(st)) {
           polling.current = false;
           setStatus("⚠ Payment was CANCELED.");
           return;
@@ -134,7 +140,7 @@ export default function Checkout() {
   };
 
   // -----------------------------
-  // HANDLE PAY  (NOW SENDS EMAIL)
+  // HANDLE PAY
   // -----------------------------
   const handlePay = async () => {
     if (!phoneValid || !emailValid) return;
@@ -149,13 +155,13 @@ export default function Checkout() {
         body: JSON.stringify({
           amount,
           phone: phoneNumber,
-          email,                             // ⭐ NEW
+          email,
           carrier,
         }),
       });
 
       const rawText = await res.text();
-      let data;
+      let data = null;
 
       try {
         data = JSON.parse(rawText);
@@ -173,19 +179,17 @@ export default function Checkout() {
 
       const orderId = data.order_id;
 
-      // Redirect mode
+      // Tranzak redirect mode
       if (data.mode === "REDIRECT" && data.payment_url) {
         setStatus("🔁 Redirecting…");
         window.location.href = data.payment_url;
         return;
       }
 
-      // Direct MoMo push
-      setStatus(
-        `🔁 Payment Started\nRequest ID: ${data.tranzak_request_id}\nWaiting for confirmation…`
-      );
-
+      // MoMo push
+      setStatus(`🔁 Payment Started\nWaiting for confirmation…`);
       startPolling(orderId);
+
     } catch (err) {
       setStatus("❌ Network error: " + err.message);
     }
@@ -199,6 +203,7 @@ export default function Checkout() {
   return (
     <div className="min-h-screen flex items-center justify-center bg-white">
       <div className="bg-white shadow-xl rounded-2xl p-8 w-full max-w-md border border-gray-100">
+
         {/* Header */}
         <div className="text-center mb-6">
           <img src="/logo.jpg" className="h-14 mx-auto mb-3" />
@@ -208,20 +213,18 @@ export default function Checkout() {
 
         {/* Status Box */}
         {status && (
-          <div
-            className={`p-3 mb-4 rounded text-sm whitespace-pre-wrap ${
+          <div className={`p-3 mb-4 rounded text-sm whitespace-pre-wrap ${
               status.startsWith("❌")
                 ? "bg-red-100 text-red-600 border border-red-300"
                 : status.startsWith("⚠")
                 ? "bg-yellow-100 text-yellow-700 border border-yellow-300"
                 : "bg-green-100 text-green-700 border border-green-300"
-            }`}
-          >
+            }`}>
             {status}
           </div>
         )}
 
-        {/* Amount */}
+        {/* Amount (LOADED AUTOMATICALLY) */}
         <div className="mb-4">
           <label>Amount (XAF)</label>
           <input
@@ -240,9 +243,7 @@ export default function Checkout() {
             placeholder="you@example.com"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
-            className={`w-full border p-3 rounded ${
-              emailError ? "border-red-500" : ""
-            }`}
+            className={`w-full border p-3 rounded ${emailError ? "border-red-500" : ""}`}
           />
           {emailError && <p className="text-red-500 text-sm">{emailError}</p>}
         </div>
@@ -255,9 +256,7 @@ export default function Checkout() {
             placeholder="6XX XXX XXX"
             value={phoneNumber}
             onChange={(e) => setPhoneNumber(e.target.value)}
-            className={`w-full border p-3 rounded ${
-              phoneError ? "border-red-500" : ""
-            }`}
+            className={`w-full border p-3 rounded ${phoneError ? "border-red-500" : ""}`}
           />
           {phoneError && <p className="text-red-500 text-sm">{phoneError}</p>}
         </div>
