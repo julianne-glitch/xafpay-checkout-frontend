@@ -14,17 +14,13 @@ export default function Checkout() {
   const [carrier, setCarrier] = useState("MTN");
   const [phoneNumber, setPhoneNumber] = useState("");
   const [email, setEmail] = useState("");
-
   const [emailError, setEmailError] = useState("");
   const [phoneError, setPhoneError] = useState("");
-
   const [backendStatus, setBackendStatus] = useState("");
   const [status, setStatus] = useState("");
   const [loading, setLoading] = useState(false);
-  const [countdown, setCountdown] = useState(5);
 
   const API_BASE = import.meta.env.VITE_API_BASE;
-
   const polling = useRef(false);
   const pollAttempts = useRef(0);
 
@@ -37,7 +33,7 @@ export default function Checkout() {
         const r = await fetch(`${API_BASE}/health.php`);
         setBackendStatus(r.ok ? "🟢 Backend Connected" : "🟠 Partial Connectivity");
       } catch {
-        setBackendStatus("🔴 Backend Offline — Retry in a moment");
+        setBackendStatus("🔴 Backend Offline");
       }
     }
     ping();
@@ -48,6 +44,7 @@ export default function Checkout() {
   // ****************************************************
   useEffect(() => {
     if (!email) return setEmailError("");
+
     const valid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
     setEmailError(valid ? "" : "Enter a valid email");
   }, [email]);
@@ -64,10 +61,10 @@ export default function Checkout() {
     if (clean.length !== 9) return setPhoneError("Phone must be 9 digits");
 
     if (carrier === "MTN" && !/^6(5|6|7|8)/.test(clean))
-      return setPhoneError("MTN MoMo numbers start with 65 / 66 / 67 / 68");
+      return setPhoneError("MTN MoMo starts with 65 / 66 / 67 / 68");
 
     if (carrier === "ORANGE" && !/^69/.test(clean))
-      return setPhoneError("Orange Money numbers start with 69");
+      return setPhoneError("Orange Money starts with 69");
 
     setPhoneError("");
   }, [phoneNumber, carrier]);
@@ -75,7 +72,7 @@ export default function Checkout() {
   const phoneValid = !phoneError && phoneNumber.length >= 9;
 
   // ****************************************************
-  // START POLLING TRANZAK PAYMENT STATUS
+  // POLLING FOR PAYMENT STATUS
   // ****************************************************
   const startPolling = (xfOrderId) => {
     polling.current = true;
@@ -86,9 +83,9 @@ export default function Checkout() {
 
       pollAttempts.current++;
 
-      if (pollAttempts.current > 18) {
+      if (pollAttempts.current > 15) {
         polling.current = false;
-        setStatus("⚠ Payment taking unusually long. Check your phone.");
+        setStatus("⚠ Payment taking longer than expected. Check your phone.");
         return;
       }
 
@@ -100,32 +97,18 @@ export default function Checkout() {
 
         const st = (data.status || "").toUpperCase();
 
-        // **********************************************
-        // SUCCESSFUL
-        // **********************************************
-        if (["SUCCESS", "SUCCESSFUL", "PAID", "COMPLETED"].includes(st)) {
+        // SUCCESS → Redirect immediately
+        if (["SUCCESS", "SUCCESSFUL", "COMPLETED", "PAID"].includes(st)) {
           polling.current = false;
-          setStatus("✅ Payment Successful! Redirecting…");
-
-          // Auto redirect after 5s
-          const interval = setInterval(() => {
-            setCountdown((c) => {
-              if (c === 1) {
-                window.location.href = returnUrl;
-              }
-              return c - 1;
-            });
-          }, 1000);
-
+          setStatus("✅ Payment Successful!");
+          window.location.href = returnUrl;
           return;
         }
 
-        // **********************************************
-        // FAILED
-        // **********************************************
+        // FAIL
         if (["FAILED", "CANCELED", "CANCELLED", "EXPIRED"].includes(st)) {
           polling.current = false;
-          setStatus("❌ Payment Failed. Please try again.");
+          setStatus("❌ Payment Failed. Try again.");
           return;
         }
       } catch {}
@@ -137,7 +120,7 @@ export default function Checkout() {
   };
 
   // ****************************************************
-  // HANDLE PAY BUTTON
+  // HANDLE PAY BUTTON CLICK
   // ****************************************************
   const handlePay = async () => {
     if (!emailValid || !phoneValid) return;
@@ -154,7 +137,7 @@ export default function Checkout() {
           phone: phoneNumber,
           email,
           carrier,
-          wc_order_id: orderId, // ⭐ CRITICAL FIX
+          wc_order_id: orderId, // ESSENTIAL FIX
         }),
       });
 
@@ -164,7 +147,7 @@ export default function Checkout() {
       try {
         data = JSON.parse(raw);
       } catch {
-        setStatus("❌ Something went wrong. Please retry.");
+        setStatus("❌ Invalid server response. Please retry.");
         setLoading(false);
         return;
       }
@@ -175,8 +158,9 @@ export default function Checkout() {
         return;
       }
 
-      setStatus("🔁 Sending payment request… Check your phone.");
+      setStatus("🔁 Check your phone to approve the payment…");
       startPolling(data.order_id);
+
     } catch (err) {
       setStatus("❌ Network error. Check your connection.");
     }
@@ -185,37 +169,33 @@ export default function Checkout() {
   };
 
   // ****************************************************
-  // UI — BEAUTIFUL + CLEAN
+  // UI
   // ****************************************************
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-50 p-4">
       <div className="bg-white shadow-xl rounded-2xl p-8 w-full max-w-md">
 
-        {/* LOGO AND STATUS */}
+        {/* LOGO + STATUS */}
         <div className="text-center mb-6">
           <img src="/logo.jpg" className="h-16 mx-auto mb-3" />
           <h1 className="text-2xl font-bold">XafPay Secure Checkout</h1>
           <p className="text-gray-500 text-sm mt-1">{backendStatus}</p>
         </div>
 
-        {/* PAYMENT STATUS BOX */}
+        {/* STATUS BOX */}
         {status && (
-          <div className={`p-3 mb-4 rounded-lg text-sm ${status.startsWith("❌")
-              ? "bg-red-100 text-red-700 border border-red-300"
+          <div className={`p-3 mb-4 rounded-lg text-sm ${
+            status.startsWith("❌")
+              ? "bg-red-100 text-red-700"
               : status.startsWith("⚠")
-              ? "bg-yellow-100 text-yellow-700 border border-yellow-300"
-              : "bg-green-100 text-green-700 border border-green-300"
+              ? "bg-yellow-100 text-yellow-700"
+              : "bg-green-100 text-green-700"
           }`}>
             {status}
-            {status.startsWith("✅") && (
-              <div className="mt-1 text-xs opacity-70">
-                Redirecting in {countdown} seconds…
-              </div>
-            )}
           </div>
         )}
 
-        {/* LOCKED AMOUNT */}
+        {/* AMOUNT (LOCKED) */}
         <div className="mb-4">
           <label>Amount Due (XAF)</label>
           <input
@@ -223,7 +203,9 @@ export default function Checkout() {
             disabled
             className="w-full border p-3 rounded bg-gray-100 font-semibold"
           />
-          <p className="text-xs text-gray-500 mt-1">Amount comes from your WooCommerce order</p>
+          <p className="text-xs text-gray-500 mt-1">
+            This amount is from your WooCommerce order.
+          </p>
         </div>
 
         {/* EMAIL */}
@@ -252,26 +234,24 @@ export default function Checkout() {
           {phoneError && <p className="text-red-500 text-sm">{phoneError}</p>}
         </div>
 
-        {/* CARRIER BUTTONS */}
+        {/* CARRIER SELECT */}
         <div className="flex gap-3 mt-3">
-          {/* MTN */}
           <button
             onClick={() => setCarrier("MTN")}
             className={`flex-1 py-3 rounded-lg font-semibold ${
               carrier === "MTN"
-                ? "bg-yellow-500 text-black ring-4 ring-yellow-700"
+                ? "bg-yellow-500 ring-4 ring-yellow-700"
                 : "bg-yellow-300"
             }`}
           >
             MTN MoMo
           </button>
 
-          {/* ORANGE */}
           <button
             onClick={() => setCarrier("ORANGE")}
             className={`flex-1 py-3 rounded-lg font-semibold ${
               carrier === "ORANGE"
-                ? "bg-orange-400 text-black ring-4 ring-orange-600"
+                ? "bg-orange-400 ring-4 ring-orange-600"
                 : "bg-orange-200"
             }`}
           >
