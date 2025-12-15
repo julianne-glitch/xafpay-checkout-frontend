@@ -4,20 +4,22 @@ export default function Checkout() {
   const url = new URL(window.location.href);
 
   // ****************************************************
-  // READ VALUES SENT FROM WOOCOMMERCE
+  // READ VALUES SENT FROM WOOCOMMERCE (SAFE)
   // ****************************************************
   const wcOrderId = url.searchParams.get("order_id");
+  const amountFromWC = Number(url.searchParams.get("amount"));
+
+  // ✅ return_url is OPTIONAL — always provide fallback
+  const rawReturnUrl = url.searchParams.get("return_url");
+  const returnUrl = rawReturnUrl
+    ? decodeURIComponent(rawReturnUrl)
+    : wcOrderId
+      ? `https://xafshop.com/checkout/order-received/${wcOrderId}/`
+      : "https://xafshop.com/";
+
   // ****************************************************
-// READ VALUES SENT FROM WOOCOMMERCE (SAFE)
-// ****************************************************
-const amountFromWC = Number(url.searchParams.get("amount"));
-
-// ✅ TRUST WOOCOMMERCE RETURN URL (contains order key)
-const rawReturnUrl = url.searchParams.get("return_url");
-const returnUrl = rawReturnUrl
-  ? decodeURIComponent(rawReturnUrl)
-  : "https://xafshop.com/";
-
+  // STATE
+  // ****************************************************
   const [amount] = useState(amountFromWC);
   const [carrier, setCarrier] = useState("MTN");
   const [phoneNumber, setPhoneNumber] = useState("");
@@ -105,7 +107,7 @@ const returnUrl = rawReturnUrl
 
         const st = (data.status || "").toUpperCase();
 
-        // ✅ SUCCESS → REDIRECT TO XAFSHOP
+        // ✅ SUCCESS → REDIRECT TO WOOCOMMERCE
         if (["SUCCESS", "SUCCESSFUL", "COMPLETED", "PAID"].includes(st)) {
           polling.current = false;
           setStatus("✅ Payment Successful! Redirecting…");
@@ -113,7 +115,6 @@ const returnUrl = rawReturnUrl
           setTimeout(() => {
             window.location.href = returnUrl;
           }, 800);
-
           return;
         }
 
@@ -135,7 +136,7 @@ const returnUrl = rawReturnUrl
   // HANDLE PAY BUTTON CLICK
   // ****************************************************
   const handlePay = async () => {
-    if (!emailValid || !phoneValid) return;
+    if (!emailValid || !phoneValid || !wcOrderId) return;
 
     setLoading(true);
     setStatus("");
@@ -149,7 +150,7 @@ const returnUrl = rawReturnUrl
           phone: phoneNumber,
           email,
           carrier,
-          wc_order_id: wcOrderId, // ✅ CRITICAL
+          wc_order_id: wcOrderId, // ✅ REQUIRED
         }),
       });
 
@@ -215,6 +216,7 @@ const returnUrl = rawReturnUrl
             onChange={(e) => setEmail(e.target.value)}
             className="w-full border p-3 rounded"
           />
+          {emailError && <p className="text-red-500 text-sm">{emailError}</p>}
         </div>
 
         <div className="mb-4">
@@ -225,18 +227,23 @@ const returnUrl = rawReturnUrl
             onChange={(e) => setPhoneNumber(e.target.value)}
             className="w-full border p-3 rounded"
           />
+          {phoneError && <p className="text-red-500 text-sm">{phoneError}</p>}
         </div>
 
         <div className="flex gap-3 mt-3">
           <button
             onClick={() => setCarrier("MTN")}
-            className="flex-1 py-3 rounded-lg bg-yellow-400 font-semibold"
+            className={`flex-1 py-3 rounded-lg font-semibold ${
+              carrier === "MTN" ? "bg-yellow-500" : "bg-yellow-300"
+            }`}
           >
             MTN MoMo
           </button>
           <button
             onClick={() => setCarrier("ORANGE")}
-            className="flex-1 py-3 rounded-lg bg-orange-400 font-semibold"
+            className={`flex-1 py-3 rounded-lg font-semibold ${
+              carrier === "ORANGE" ? "bg-orange-500" : "bg-orange-300"
+            }`}
           >
             Orange Money
           </button>
@@ -244,7 +251,7 @@ const returnUrl = rawReturnUrl
 
         <button
           onClick={handlePay}
-          disabled={loading}
+          disabled={!emailValid || !phoneValid || loading}
           className="w-full mt-6 py-3 rounded-lg bg-red-600 text-white text-xl font-bold"
         >
           {loading ? "Processing…" : `Pay ${amount} XAF`}
