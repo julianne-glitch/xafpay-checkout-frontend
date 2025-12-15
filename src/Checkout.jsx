@@ -7,12 +7,16 @@ export default function Checkout() {
   // READ VALUES SENT FROM WOOCOMMERCE
   // ****************************************************
   const wcOrderId = url.searchParams.get("order_id");
-  const amountFromWC = Number(url.searchParams.get("amount"));
+  // ****************************************************
+// READ VALUES SENT FROM WOOCOMMERCE (SAFE)
+// ****************************************************
+const amountFromWC = Number(url.searchParams.get("amount"));
 
-  // ✅ DO NOT RELY ON return_url (it is unreliable)
-  const returnUrl = wcOrderId
-    ? `https://xafshop.com/checkout/order-received/${wcOrderId}/`
-    : "https://xafshop.com/";
+// ✅ TRUST WOOCOMMERCE RETURN URL (contains order key)
+const rawReturnUrl = url.searchParams.get("return_url");
+const returnUrl = rawReturnUrl
+  ? decodeURIComponent(rawReturnUrl)
+  : "https://xafshop.com/";
 
   const [amount] = useState(amountFromWC);
   const [carrier, setCarrier] = useState("MTN");
