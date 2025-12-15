@@ -3,88 +3,75 @@ import React, { useState, useEffect, useRef } from "react";
 export default function Checkout() {
   const url = new URL(window.location.href);
 
-  // --------------------------------------------------
-  // READ VALUES FROM WOOCOMMERCE
-  // --------------------------------------------------
-  const wcOrderId = url.searchParams.get("order_id");
-  const amountFromWC = Number(url.searchParams.get("amount"));
+  // ====================================================
+  // READ GENERIC CHECKOUT PARAMS (PLATFORM-AGNOSTIC)
+  // ====================================================
+  const amount = Number(url.searchParams.get("amount"));
+  const currency = url.searchParams.get("currency") || "XAF";
+  const reference =
+    url.searchParams.get("reference") ||
+    url.searchParams.get("order_id"); // backward compatible
   const rawReturnUrl = url.searchParams.get("return_url");
 
-  // ❗ HARD REQUIREMENTS
-  if (!wcOrderId || !amountFromWC) {
+  const [fatalError, setFatalError] = useState(false);
+
+  useEffect(() => {
+    if (!amount || !reference || !rawReturnUrl) {
+      setFatalError(true);
+    }
+  }, []);
+
+  if (fatalError) {
     return (
-      <div className="min-h-screen flex items-center justify-center text-red-600 text-center p-6">
+      <div className="min-h-screen flex items-center justify-center text-center">
         <div>
-          <h2 className="text-xl font-bold mb-2">Invalid Checkout Link</h2>
-          <p>Please return to the shop and try again.</p>
+          <h1 className="text-2xl font-bold text-red-600">
+            Invalid Checkout Link
+          </h1>
+          <p className="text-gray-600 mt-2">
+            Please return to the merchant and try again.
+          </p>
         </div>
       </div>
     );
   }
 
-  // ✅ SAFE RETURN URL (Woo should send it, but never crash if missing)
-  const returnUrl = rawReturnUrl
-    ? decodeURIComponent(rawReturnUrl)
-    : `https://xafshop.com/checkout/order-received/${wcOrderId}/`;
+  const returnUrl = decodeURIComponent(rawReturnUrl);
 
-  // --------------------------------------------------
+  // ====================================================
   // STATE
-  // --------------------------------------------------
-  const [amount] = useState(amountFromWC);
+  // ====================================================
   const [carrier, setCarrier] = useState("MTN");
-  const [phoneNumber, setPhoneNumber] = useState("");
+  const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
-  const [emailError, setEmailError] = useState("");
-  const [phoneError, setPhoneError] = useState("");
-  const [backendStatus, setBackendStatus] = useState("");
   const [status, setStatus] = useState("");
   const [loading, setLoading] = useState(false);
+  const [backendStatus, setBackendStatus] = useState("");
 
   const API_BASE = import.meta.env.VITE_API_BASE;
   const polling = useRef(false);
   const pollAttempts = useRef(0);
 
-  // --------------------------------------------------
+  // ====================================================
   // BACKEND HEALTH
-  // --------------------------------------------------
+  // ====================================================
   useEffect(() => {
     fetch(`${API_BASE}/health.php`)
-      .then(r => setBackendStatus(r.ok ? "🟢 Backend Connected" : "🟠 Partial Connectivity"))
+      .then((r) =>
+        setBackendStatus(r.ok ? "🟢 Backend Connected" : "🟠 Backend Issue")
+      )
       .catch(() => setBackendStatus("🔴 Backend Offline"));
   }, []);
 
-  // --------------------------------------------------
-  // VALIDATION
-  // --------------------------------------------------
-  useEffect(() => {
-    if (!email) return setEmailError("");
-    setEmailError(/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? "" : "Invalid email");
-  }, [email]);
-
-  useEffect(() => {
-    if (!phoneNumber) return setPhoneError("");
-    const clean = phoneNumber.replace(/\D/g, "");
-    if (clean.length !== 9) return setPhoneError("Phone must be 9 digits");
-
-    if (carrier === "MTN" && !/^6(5|6|7|8)/.test(clean))
-      return setPhoneError("MTN starts with 65 / 66 / 67 / 68");
-
-    if (carrier === "ORANGE" && !/^69/.test(clean))
-      return setPhoneError("Orange starts with 69");
-
-    setPhoneError("");
-  }, [phoneNumber, carrier]);
-
-  // --------------------------------------------------
+  // ====================================================
   // POLLING
-  // --------------------------------------------------
+  // ====================================================
   const startPolling = (xfOrderId) => {
     polling.current = true;
     pollAttempts.current = 0;
 
     const poll = async () => {
       if (!polling.current) return;
-
       if (++pollAttempts.current > 15) {
         polling.current = false;
         setStatus("⚠ Payment taking longer than expected.");
@@ -92,7 +79,9 @@ export default function Checkout() {
       }
 
       try {
-        const res = await fetch(`${API_BASE}/check_payment.php?order_id=${xfOrderId}`);
+        const res = await fetch(
+          `${API_BASE}/check_payment.php?order_id=${xfOrderId}`
+        );
         const data = await res.json();
         if (!data.ok) return;
 
@@ -100,14 +89,16 @@ export default function Checkout() {
 
         if (["SUCCESS", "SUCCESSFUL", "COMPLETED", "PAID"].includes(st)) {
           polling.current = false;
-          setStatus("✅ Payment Successful! Redirecting…");
-          window.location.href = returnUrl;
+          setStatus("✅ Payment Successful. Redirecting…");
+          setTimeout(() => {
+            window.location.href = returnUrl;
+          }, 800);
           return;
         }
 
         if (["FAILED", "CANCELED", "CANCELLED", "EXPIRED"].includes(st)) {
           polling.current = false;
-          setStatus("❌ Payment Failed.");
+          setStatus("❌ Payment failed.");
           return;
         }
       } catch {}
@@ -118,11 +109,11 @@ export default function Checkout() {
     poll();
   };
 
-  // --------------------------------------------------
+  // ====================================================
   // PAY
-  // --------------------------------------------------
+  // ====================================================
   const handlePay = async () => {
-    if (!email || emailError || phoneError) return;
+    if (!phone || !email) return;
 
     setLoading(true);
     setStatus("");
@@ -133,15 +124,17 @@ export default function Checkout() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           amount,
-          phone: phoneNumber,
+          currency,
+          phone,
           email,
           carrier,
-          wc_order_id: wcOrderId
+          reference,     // 🔑 merchant reference
+          return_url: returnUrl
         }),
       });
 
       const data = await res.json();
-      if (!data.ok) throw new Error();
+      if (!data.ok) throw new Error(data.error);
 
       setStatus("🔁 Check your phone to approve payment…");
       startPolling(data.order_id);
@@ -152,15 +145,14 @@ export default function Checkout() {
     setLoading(false);
   };
 
-  // --------------------------------------------------
+  // ====================================================
   // UI
-  // --------------------------------------------------
+  // ====================================================
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-50 p-4">
       <div className="bg-white shadow-xl rounded-2xl p-8 w-full max-w-md">
 
         <div className="text-center mb-6">
-          <img src="/logo.jpg" className="h-16 mx-auto mb-3" />
           <h1 className="text-2xl font-bold">XafPay Secure Checkout</h1>
           <p className="text-gray-500 text-sm">{backendStatus}</p>
         </div>
@@ -171,29 +163,43 @@ export default function Checkout() {
           </div>
         )}
 
-        <input disabled value={amount} className="w-full p-3 border rounded mb-4 bg-gray-100" />
+        <input
+          disabled
+          value={`${amount} ${currency}`}
+          className="w-full p-3 border rounded mb-4 bg-gray-100 font-semibold"
+        />
 
         <input
           type="email"
           placeholder="Email"
           value={email}
-          onChange={e => setEmail(e.target.value)}
+          onChange={(e) => setEmail(e.target.value)}
           className="w-full p-3 border rounded mb-2"
         />
 
         <input
           type="tel"
-          placeholder="6XX XXX XXX"
-          value={phoneNumber}
-          onChange={e => setPhoneNumber(e.target.value)}
-          className="w-full p-3 border rounded mb-2"
+          placeholder="6XXXXXXXX"
+          value={phone}
+          onChange={(e) => setPhone(e.target.value)}
+          className="w-full p-3 border rounded mb-3"
         />
 
-        <div className="flex gap-3">
-          <button onClick={() => setCarrier("MTN")} className="flex-1 bg-yellow-400 py-2 rounded">
+        <div className="flex gap-3 mb-4">
+          <button
+            onClick={() => setCarrier("MTN")}
+            className={`flex-1 py-2 rounded ${
+              carrier === "MTN" ? "bg-yellow-400" : "bg-yellow-200"
+            }`}
+          >
             MTN
           </button>
-          <button onClick={() => setCarrier("ORANGE")} className="flex-1 bg-orange-400 py-2 rounded">
+          <button
+            onClick={() => setCarrier("ORANGE")}
+            className={`flex-1 py-2 rounded ${
+              carrier === "ORANGE" ? "bg-orange-400" : "bg-orange-200"
+            }`}
+          >
             ORANGE
           </button>
         </div>
@@ -201,11 +207,10 @@ export default function Checkout() {
         <button
           onClick={handlePay}
           disabled={loading}
-          className="w-full mt-4 py-3 bg-red-600 text-white rounded text-lg"
+          className="w-full py-3 bg-red-600 text-white rounded text-lg"
         >
-          {loading ? "Processing…" : `Pay ${amount} XAF`}
+          {loading ? "Processing…" : `Pay ${amount} ${currency}`}
         </button>
-
       </div>
     </div>
   );
