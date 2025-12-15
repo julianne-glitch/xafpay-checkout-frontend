@@ -4,18 +4,17 @@ export default function Checkout() {
   const url = new URL(window.location.href);
 
   // ****************************************************
-  // READ VALUES SENT FROM WOOCOMMERCE (SAFE)
+  // READ VALUES SENT FROM WOOCOMMERCE (STRICT – NO FALLBACKS)
   // ****************************************************
   const wcOrderId = url.searchParams.get("order_id");
   const amountFromWC = Number(url.searchParams.get("amount"));
-
-  // ✅ return_url is OPTIONAL — always provide fallback
   const rawReturnUrl = url.searchParams.get("return_url");
-  const returnUrl = rawReturnUrl
-    ? decodeURIComponent(rawReturnUrl)
-    : wcOrderId
-      ? `https://xafshop.com/checkout/order-received/${wcOrderId}/`
-      : "https://xafshop.com/";
+
+  if (!wcOrderId || !rawReturnUrl || !amountFromWC) {
+    throw new Error("Invalid checkout entry: missing WooCommerce parameters");
+  }
+
+  const returnUrl = decodeURIComponent(rawReturnUrl);
 
   // ****************************************************
   // STATE
@@ -38,34 +37,21 @@ export default function Checkout() {
   // BACKEND HEALTH CHECK
   // ****************************************************
   useEffect(() => {
-    async function ping() {
-      try {
-        const r = await fetch(`${API_BASE}/health.php`);
-        setBackendStatus(r.ok ? "🟢 Backend Connected" : "🟠 Partial Connectivity");
-      } catch {
-        setBackendStatus("🔴 Backend Offline");
-      }
-    }
-    ping();
+    fetch(`${API_BASE}/health.php`)
+      .then(r => setBackendStatus(r.ok ? "🟢 Backend Connected" : "🟠 Partial Connectivity"))
+      .catch(() => setBackendStatus("🔴 Backend Offline"));
   }, []);
 
   // ****************************************************
-  // EMAIL VALIDATION
+  // VALIDATION
   // ****************************************************
   useEffect(() => {
     if (!email) return setEmailError("");
-    const valid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
-    setEmailError(valid ? "" : "Enter a valid email");
+    setEmailError(/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? "" : "Enter a valid email");
   }, [email]);
 
-  const emailValid = email && !emailError;
-
-  // ****************************************************
-  // PHONE VALIDATION
-  // ****************************************************
   useEffect(() => {
     if (!phoneNumber) return setPhoneError("");
-
     const clean = phoneNumber.replace(/\D/g, "");
     if (clean.length !== 9) return setPhoneError("Phone must be 9 digits");
 
@@ -78,10 +64,8 @@ export default function Checkout() {
     setPhoneError("");
   }, [phoneNumber, carrier]);
 
-  const phoneValid = !phoneError && phoneNumber.length >= 9;
-
   // ****************************************************
-  // POLLING FOR PAYMENT STATUS
+  // POLLING
   // ****************************************************
   const startPolling = (xfOrderId) => {
     polling.current = true;
@@ -89,39 +73,29 @@ export default function Checkout() {
 
     const poll = async () => {
       if (!polling.current) return;
-
-      pollAttempts.current++;
-
-      if (pollAttempts.current > 15) {
+      if (++pollAttempts.current > 15) {
         polling.current = false;
-        setStatus("⚠ Payment taking longer than expected. Check your phone.");
+        setStatus("⚠ Payment taking longer than expected.");
         return;
       }
 
       try {
-        const res = await fetch(
-          `${API_BASE}/check_payment.php?order_id=${xfOrderId}`
-        );
+        const res = await fetch(`${API_BASE}/check_payment.php?order_id=${xfOrderId}`);
         const data = await res.json();
         if (!data.ok) return;
 
         const st = (data.status || "").toUpperCase();
 
-        // ✅ SUCCESS → REDIRECT TO WOOCOMMERCE
         if (["SUCCESS", "SUCCESSFUL", "COMPLETED", "PAID"].includes(st)) {
           polling.current = false;
           setStatus("✅ Payment Successful! Redirecting…");
-
-          setTimeout(() => {
-            window.location.href = returnUrl;
-          }, 800);
+          window.location.href = returnUrl;
           return;
         }
 
-        // ❌ FAILURE
         if (["FAILED", "CANCELED", "CANCELLED", "EXPIRED"].includes(st)) {
           polling.current = false;
-          setStatus("❌ Payment Failed. Try again.");
+          setStatus("❌ Payment Failed.");
           return;
         }
       } catch {}
@@ -133,10 +107,10 @@ export default function Checkout() {
   };
 
   // ****************************************************
-  // HANDLE PAY BUTTON CLICK
+  // PAY
   // ****************************************************
   const handlePay = async () => {
-    if (!emailValid || !phoneValid || !wcOrderId) return;
+    if (!email || emailError || phoneError) return;
 
     setLoading(true);
     setStatus("");
@@ -150,31 +124,17 @@ export default function Checkout() {
           phone: phoneNumber,
           email,
           carrier,
-          wc_order_id: wcOrderId, // ✅ REQUIRED
+          wc_order_id: wcOrderId
         }),
       });
 
-      const raw = await res.text();
-      let data;
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error);
 
-      try {
-        data = JSON.parse(raw);
-      } catch {
-        setStatus("❌ Invalid server response. Please retry.");
-        setLoading(false);
-        return;
-      }
-
-      if (!data.ok) {
-        setStatus("❌ " + (data.error || "Payment Error"));
-        setLoading(false);
-        return;
-      }
-
-      setStatus("🔁 Check your phone to approve the payment…");
+      setStatus("🔁 Check your phone to approve payment…");
       startPolling(data.order_id);
-    } catch {
-      setStatus("❌ Network error. Check your connection.");
+    } catch (e) {
+      setStatus("❌ Payment error. Please retry.");
     }
 
     setLoading(false);
@@ -190,70 +150,30 @@ export default function Checkout() {
         <div className="text-center mb-6">
           <img src="/logo.jpg" className="h-16 mx-auto mb-3" />
           <h1 className="text-2xl font-bold">XafPay Secure Checkout</h1>
-          <p className="text-gray-500 text-sm mt-1">{backendStatus}</p>
+          <p className="text-gray-500 text-sm">{backendStatus}</p>
         </div>
 
         {status && (
-          <div className="p-3 mb-4 rounded-lg text-sm bg-green-100 text-green-700">
+          <div className="p-3 mb-4 rounded bg-green-100 text-green-700 text-sm">
             {status}
           </div>
         )}
 
-        <div className="mb-4">
-          <label>Amount Due (XAF)</label>
-          <input
-            value={amount}
-            disabled
-            className="w-full border p-3 rounded bg-gray-100 font-semibold"
-          />
+        <input disabled value={amount} className="w-full p-3 border rounded mb-4 bg-gray-100" />
+
+        <input type="email" placeholder="Email" value={email}
+          onChange={e => setEmail(e.target.value)} className="w-full p-3 border rounded mb-2" />
+
+        <input type="tel" placeholder="6XX XXX XXX" value={phoneNumber}
+          onChange={e => setPhoneNumber(e.target.value)} className="w-full p-3 border rounded mb-2" />
+
+        <div className="flex gap-3">
+          <button onClick={() => setCarrier("MTN")} className="flex-1 bg-yellow-400 py-2 rounded">MTN</button>
+          <button onClick={() => setCarrier("ORANGE")} className="flex-1 bg-orange-400 py-2 rounded">ORANGE</button>
         </div>
 
-        <div className="mb-4">
-          <label>Email Address</label>
-          <input
-            type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            className="w-full border p-3 rounded"
-          />
-          {emailError && <p className="text-red-500 text-sm">{emailError}</p>}
-        </div>
-
-        <div className="mb-4">
-          <label>Mobile Money Number</label>
-          <input
-            type="tel"
-            value={phoneNumber}
-            onChange={(e) => setPhoneNumber(e.target.value)}
-            className="w-full border p-3 rounded"
-          />
-          {phoneError && <p className="text-red-500 text-sm">{phoneError}</p>}
-        </div>
-
-        <div className="flex gap-3 mt-3">
-          <button
-            onClick={() => setCarrier("MTN")}
-            className={`flex-1 py-3 rounded-lg font-semibold ${
-              carrier === "MTN" ? "bg-yellow-500" : "bg-yellow-300"
-            }`}
-          >
-            MTN MoMo
-          </button>
-          <button
-            onClick={() => setCarrier("ORANGE")}
-            className={`flex-1 py-3 rounded-lg font-semibold ${
-              carrier === "ORANGE" ? "bg-orange-500" : "bg-orange-300"
-            }`}
-          >
-            Orange Money
-          </button>
-        </div>
-
-        <button
-          onClick={handlePay}
-          disabled={!emailValid || !phoneValid || loading}
-          className="w-full mt-6 py-3 rounded-lg bg-red-600 text-white text-xl font-bold"
-        >
+        <button onClick={handlePay} disabled={loading}
+          className="w-full mt-4 py-3 bg-red-600 text-white rounded text-lg">
           {loading ? "Processing…" : `Pay ${amount} XAF`}
         </button>
 
