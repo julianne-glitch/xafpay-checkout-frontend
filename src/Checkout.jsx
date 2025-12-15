@@ -3,22 +3,33 @@ import React, { useState, useEffect, useRef } from "react";
 export default function Checkout() {
   const url = new URL(window.location.href);
 
-  // ****************************************************
-  // READ VALUES SENT FROM WOOCOMMERCE (STRICT – NO FALLBACKS)
-  // ****************************************************
+  // --------------------------------------------------
+  // READ VALUES FROM WOOCOMMERCE
+  // --------------------------------------------------
   const wcOrderId = url.searchParams.get("order_id");
   const amountFromWC = Number(url.searchParams.get("amount"));
   const rawReturnUrl = url.searchParams.get("return_url");
 
-  if (!wcOrderId || !rawReturnUrl || !amountFromWC) {
-    throw new Error("Invalid checkout entry: missing WooCommerce parameters");
+  // ❗ HARD REQUIREMENTS
+  if (!wcOrderId || !amountFromWC) {
+    return (
+      <div className="min-h-screen flex items-center justify-center text-red-600 text-center p-6">
+        <div>
+          <h2 className="text-xl font-bold mb-2">Invalid Checkout Link</h2>
+          <p>Please return to the shop and try again.</p>
+        </div>
+      </div>
+    );
   }
 
-  const returnUrl = decodeURIComponent(rawReturnUrl);
+  // ✅ SAFE RETURN URL (Woo should send it, but never crash if missing)
+  const returnUrl = rawReturnUrl
+    ? decodeURIComponent(rawReturnUrl)
+    : `https://xafshop.com/checkout/order-received/${wcOrderId}/`;
 
-  // ****************************************************
+  // --------------------------------------------------
   // STATE
-  // ****************************************************
+  // --------------------------------------------------
   const [amount] = useState(amountFromWC);
   const [carrier, setCarrier] = useState("MTN");
   const [phoneNumber, setPhoneNumber] = useState("");
@@ -33,21 +44,21 @@ export default function Checkout() {
   const polling = useRef(false);
   const pollAttempts = useRef(0);
 
-  // ****************************************************
-  // BACKEND HEALTH CHECK
-  // ****************************************************
+  // --------------------------------------------------
+  // BACKEND HEALTH
+  // --------------------------------------------------
   useEffect(() => {
     fetch(`${API_BASE}/health.php`)
       .then(r => setBackendStatus(r.ok ? "🟢 Backend Connected" : "🟠 Partial Connectivity"))
       .catch(() => setBackendStatus("🔴 Backend Offline"));
   }, []);
 
-  // ****************************************************
+  // --------------------------------------------------
   // VALIDATION
-  // ****************************************************
+  // --------------------------------------------------
   useEffect(() => {
     if (!email) return setEmailError("");
-    setEmailError(/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? "" : "Enter a valid email");
+    setEmailError(/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? "" : "Invalid email");
   }, [email]);
 
   useEffect(() => {
@@ -56,23 +67,24 @@ export default function Checkout() {
     if (clean.length !== 9) return setPhoneError("Phone must be 9 digits");
 
     if (carrier === "MTN" && !/^6(5|6|7|8)/.test(clean))
-      return setPhoneError("MTN MoMo starts with 65 / 66 / 67 / 68");
+      return setPhoneError("MTN starts with 65 / 66 / 67 / 68");
 
     if (carrier === "ORANGE" && !/^69/.test(clean))
-      return setPhoneError("Orange Money starts with 69");
+      return setPhoneError("Orange starts with 69");
 
     setPhoneError("");
   }, [phoneNumber, carrier]);
 
-  // ****************************************************
+  // --------------------------------------------------
   // POLLING
-  // ****************************************************
+  // --------------------------------------------------
   const startPolling = (xfOrderId) => {
     polling.current = true;
     pollAttempts.current = 0;
 
     const poll = async () => {
       if (!polling.current) return;
+
       if (++pollAttempts.current > 15) {
         polling.current = false;
         setStatus("⚠ Payment taking longer than expected.");
@@ -106,9 +118,9 @@ export default function Checkout() {
     poll();
   };
 
-  // ****************************************************
+  // --------------------------------------------------
   // PAY
-  // ****************************************************
+  // --------------------------------------------------
   const handlePay = async () => {
     if (!email || emailError || phoneError) return;
 
@@ -129,20 +141,20 @@ export default function Checkout() {
       });
 
       const data = await res.json();
-      if (!data.ok) throw new Error(data.error);
+      if (!data.ok) throw new Error();
 
       setStatus("🔁 Check your phone to approve payment…");
       startPolling(data.order_id);
-    } catch (e) {
+    } catch {
       setStatus("❌ Payment error. Please retry.");
     }
 
     setLoading(false);
   };
 
-  // ****************************************************
+  // --------------------------------------------------
   // UI
-  // ****************************************************
+  // --------------------------------------------------
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-50 p-4">
       <div className="bg-white shadow-xl rounded-2xl p-8 w-full max-w-md">
@@ -161,19 +173,36 @@ export default function Checkout() {
 
         <input disabled value={amount} className="w-full p-3 border rounded mb-4 bg-gray-100" />
 
-        <input type="email" placeholder="Email" value={email}
-          onChange={e => setEmail(e.target.value)} className="w-full p-3 border rounded mb-2" />
+        <input
+          type="email"
+          placeholder="Email"
+          value={email}
+          onChange={e => setEmail(e.target.value)}
+          className="w-full p-3 border rounded mb-2"
+        />
 
-        <input type="tel" placeholder="6XX XXX XXX" value={phoneNumber}
-          onChange={e => setPhoneNumber(e.target.value)} className="w-full p-3 border rounded mb-2" />
+        <input
+          type="tel"
+          placeholder="6XX XXX XXX"
+          value={phoneNumber}
+          onChange={e => setPhoneNumber(e.target.value)}
+          className="w-full p-3 border rounded mb-2"
+        />
 
         <div className="flex gap-3">
-          <button onClick={() => setCarrier("MTN")} className="flex-1 bg-yellow-400 py-2 rounded">MTN</button>
-          <button onClick={() => setCarrier("ORANGE")} className="flex-1 bg-orange-400 py-2 rounded">ORANGE</button>
+          <button onClick={() => setCarrier("MTN")} className="flex-1 bg-yellow-400 py-2 rounded">
+            MTN
+          </button>
+          <button onClick={() => setCarrier("ORANGE")} className="flex-1 bg-orange-400 py-2 rounded">
+            ORANGE
+          </button>
         </div>
 
-        <button onClick={handlePay} disabled={loading}
-          className="w-full mt-4 py-3 bg-red-600 text-white rounded text-lg">
+        <button
+          onClick={handlePay}
+          disabled={loading}
+          className="w-full mt-4 py-3 bg-red-600 text-white rounded text-lg"
+        >
           {loading ? "Processing…" : `Pay ${amount} XAF`}
         </button>
 
