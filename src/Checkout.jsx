@@ -6,9 +6,13 @@ export default function Checkout() {
   // ****************************************************
   // READ VALUES SENT FROM WOOCOMMERCE
   // ****************************************************
-  const orderId = url.searchParams.get("order_id");
+  const wcOrderId = url.searchParams.get("order_id");
   const amountFromWC = Number(url.searchParams.get("amount"));
-  const returnUrl = url.searchParams.get("return_url") || "/";
+
+  // ✅ DO NOT RELY ON return_url (it is unreliable)
+  const returnUrl = wcOrderId
+    ? `https://xafshop.com/checkout/order-received/${wcOrderId}/`
+    : "https://xafshop.com/";
 
   const [amount] = useState(amountFromWC);
   const [carrier, setCarrier] = useState("MTN");
@@ -44,7 +48,6 @@ export default function Checkout() {
   // ****************************************************
   useEffect(() => {
     if (!email) return setEmailError("");
-
     const valid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
     setEmailError(valid ? "" : "Enter a valid email");
   }, [email]);
@@ -90,22 +93,27 @@ export default function Checkout() {
       }
 
       try {
-        const res = await fetch(`${API_BASE}/check_payment.php?order_id=${xfOrderId}`);
+        const res = await fetch(
+          `${API_BASE}/check_payment.php?order_id=${xfOrderId}`
+        );
         const data = await res.json();
-
         if (!data.ok) return;
 
         const st = (data.status || "").toUpperCase();
 
-        // SUCCESS → Redirect immediately
+        // ✅ SUCCESS → REDIRECT TO XAFSHOP
         if (["SUCCESS", "SUCCESSFUL", "COMPLETED", "PAID"].includes(st)) {
           polling.current = false;
-          setStatus("✅ Payment Successful!");
-          window.location.href = returnUrl;
+          setStatus("✅ Payment Successful! Redirecting…");
+
+          setTimeout(() => {
+            window.location.href = returnUrl;
+          }, 800);
+
           return;
         }
 
-        // FAIL
+        // ❌ FAILURE
         if (["FAILED", "CANCELED", "CANCELLED", "EXPIRED"].includes(st)) {
           polling.current = false;
           setStatus("❌ Payment Failed. Try again.");
@@ -137,7 +145,7 @@ export default function Checkout() {
           phone: phoneNumber,
           email,
           carrier,
-          wc_order_id: orderId, // ESSENTIAL FIX
+          wc_order_id: wcOrderId, // ✅ CRITICAL
         }),
       });
 
@@ -160,8 +168,7 @@ export default function Checkout() {
 
       setStatus("🔁 Check your phone to approve the payment…");
       startPolling(data.order_id);
-
-    } catch (err) {
+    } catch {
       setStatus("❌ Network error. Check your connection.");
     }
 
@@ -175,27 +182,18 @@ export default function Checkout() {
     <div className="min-h-screen flex items-center justify-center bg-gray-50 p-4">
       <div className="bg-white shadow-xl rounded-2xl p-8 w-full max-w-md">
 
-        {/* LOGO + STATUS */}
         <div className="text-center mb-6">
           <img src="/logo.jpg" className="h-16 mx-auto mb-3" />
           <h1 className="text-2xl font-bold">XafPay Secure Checkout</h1>
           <p className="text-gray-500 text-sm mt-1">{backendStatus}</p>
         </div>
 
-        {/* STATUS BOX */}
         {status && (
-          <div className={`p-3 mb-4 rounded-lg text-sm ${
-            status.startsWith("❌")
-              ? "bg-red-100 text-red-700"
-              : status.startsWith("⚠")
-              ? "bg-yellow-100 text-yellow-700"
-              : "bg-green-100 text-green-700"
-          }`}>
+          <div className="p-3 mb-4 rounded-lg text-sm bg-green-100 text-green-700">
             {status}
           </div>
         )}
 
-        {/* AMOUNT (LOCKED) */}
         <div className="mb-4">
           <label>Amount Due (XAF)</label>
           <input
@@ -203,69 +201,47 @@ export default function Checkout() {
             disabled
             className="w-full border p-3 rounded bg-gray-100 font-semibold"
           />
-          <p className="text-xs text-gray-500 mt-1">
-            This amount is from your WooCommerce order.
-          </p>
         </div>
 
-        {/* EMAIL */}
         <div className="mb-4">
           <label>Email Address</label>
           <input
             type="email"
-            placeholder="you@example.com"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
-            className={`w-full border p-3 rounded ${emailError ? "border-red-500" : ""}`}
+            className="w-full border p-3 rounded"
           />
-          {emailError && <p className="text-red-500 text-sm">{emailError}</p>}
         </div>
 
-        {/* PHONE */}
         <div className="mb-4">
           <label>Mobile Money Number</label>
           <input
             type="tel"
-            placeholder="6XX XXX XXX"
             value={phoneNumber}
             onChange={(e) => setPhoneNumber(e.target.value)}
-            className={`w-full border p-3 rounded ${phoneError ? "border-red-500" : ""}`}
+            className="w-full border p-3 rounded"
           />
-          {phoneError && <p className="text-red-500 text-sm">{phoneError}</p>}
         </div>
 
-        {/* CARRIER SELECT */}
         <div className="flex gap-3 mt-3">
           <button
             onClick={() => setCarrier("MTN")}
-            className={`flex-1 py-3 rounded-lg font-semibold ${
-              carrier === "MTN"
-                ? "bg-yellow-500 ring-4 ring-yellow-700"
-                : "bg-yellow-300"
-            }`}
+            className="flex-1 py-3 rounded-lg bg-yellow-400 font-semibold"
           >
             MTN MoMo
           </button>
-
           <button
             onClick={() => setCarrier("ORANGE")}
-            className={`flex-1 py-3 rounded-lg font-semibold ${
-              carrier === "ORANGE"
-                ? "bg-orange-400 ring-4 ring-orange-600"
-                : "bg-orange-200"
-            }`}
+            className="flex-1 py-3 rounded-lg bg-orange-400 font-semibold"
           >
             Orange Money
           </button>
         </div>
 
-        {/* PAY BUTTON */}
         <button
           onClick={handlePay}
-          disabled={!phoneValid || !emailValid || loading}
-          className={`w-full mt-6 py-3 rounded-lg text-white text-xl font-bold ${
-            loading ? "bg-gray-400" : "bg-red-600 hover:bg-red-700"
-          }`}
+          disabled={loading}
+          className="w-full mt-6 py-3 rounded-lg bg-red-600 text-white text-xl font-bold"
         >
           {loading ? "Processing…" : `Pay ${amount} XAF`}
         </button>
